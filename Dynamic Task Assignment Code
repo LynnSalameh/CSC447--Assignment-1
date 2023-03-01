@@ -1,0 +1,84 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <mpi.h>
+
+#define WIDTH 1000
+#define HEIGHT 1000
+#define MAX_ITER 1000
+
+int mandelbrot(double cx, double cy)
+{
+    double x = 0.0, y = 0.0, xtemp;
+    int iter = 0;
+    while (x*x + y*y <= 4.0 && iter < MAX_ITER) {
+        xtemp = x*x - y*y + cx;
+        y = 2.0*x*y + cy;
+        x = xtemp;
+        iter++;
+    }
+    return iter;
+}
+
+int main(int argc, char **argv)
+{
+    int rank, size, row, i, j, task_id;
+    double xmin = -2.0, xmax = 2.0, ymin = -2.0, ymax = 2.0, x, y, dx, dy;
+    int *row_values;
+    MPI_Status status;
+    MPI_Request request;
+
+    MPI_Init(&argc, &argv);
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
+
+    dx = (xmax - xmin) / WIDTH;
+    dy = (ymax - ymin) / HEIGHT;
+
+    if (rank == 0) {
+        row_values = (int *) malloc(sizeof(int) * WIDTH);
+
+        // master node distributes tasks
+        for (task_id = 0; task_id < HEIGHT; task_id++) {
+            MPI_Recv(&row, 1, MPI_INT, MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
+            MPI_Send(&task_id, 1, MPI_INT, status.MPI_SOURCE, 0, MPI_COMM_WORLD);
+        }
+
+        // master node receives results
+        for (i = 0; i < HEIGHT; i++) {
+            MPI_Recv(row_values, WIDTH, MPI_INT, MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
+            row = status.MPI_TAG;
+            for (j = 0; j < WIDTH; j++) {
+                printf("%d ", row_values[j]);
+            }
+            printf("\n");
+        }
+
+        free(row_values);
+    }
+    else {
+        while (1) {
+            // slave nodes request tasks
+            MPI_Send(&row, 1, MPI_INT, 0, 0, MPI_COMM_WORLD);
+            MPI_Recv(&task_id, 1, MPI_INT, 0, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
+
+            // check for termination signal
+            if (task_id == -1) {
+                break;
+            }
+
+            // compute row values
+            y = ymin + task_id * dy;
+            for (j = 0; j < WIDTH; j++) {
+                x = xmin + j * dx;
+                row_values[j] = mandelbrot(x, y);
+            }
+
+            // send results back to master node
+            MPI_Send(row_values, WIDTH, MPI_INT, 0, task_id, MPI_COMM_WORLD);
+        }
+    }
+
+    MPI_Finalize();
+
+    return 0;
+}
